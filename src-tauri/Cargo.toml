@@ -1,6 +1,6 @@
 [package]
 name = "audio-converter"
-version = "0.1.1"
+version = "0.1.2"
 description = "Drag-and-drop audio format converter"
 edition = "2021"
 rust-version = "1.77"
