@@ -99,9 +99,10 @@ git push --tags
   source available on request). If that's a problem, switch to an
   LGPL-only ffmpeg build (drop libx264/libx265/etc.) — fine for this app
   since none of the target formats need those codecs.
-- **Code signing.** Builds are unsigned. macOS users will need to
-  right-click → Open (or clear the quarantine flag) on first launch, and
-  Windows SmartScreen may warn on first run. Add
-  `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` (or a Windows code-signing
-  cert) as repo secrets and pass them to `tauri-action` when you're ready to
-  sign.
+- **Code signing (macOS).** Release builds are signed and notarized when
+  these repo secrets are set (same as
+  `archivist-claude-podcast-installer`): `APPLE_CERTIFICATE`,
+  `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
+  `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Without them, macOS Gatekeeper will
+  block the app with a misleading "damaged" error — clear quarantine with
+  `xattr -cr "/Applications/Audio Converter.app"` as a workaround.
