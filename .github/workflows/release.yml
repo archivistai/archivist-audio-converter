@@ -1,0 +1,93 @@
+name: Build & Release
+
+# Cuts a new release whenever a version tag (e.g. v0.1.0) is pushed.
+# Trigger a release with:
+#   git tag v0.1.0 && git push --tags
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-14 # Apple Silicon runner
+            rust-target: aarch64-apple-darwin
+            sidecar-target: aarch64-apple-darwin
+          - platform: macos-13 # Intel runner
+            rust-target: x86_64-apple-darwin
+            sidecar-target: x86_64-apple-darwin
+          - platform: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            sidecar-target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend deps
+        run: npm install
+
+      # --- Stage the ffmpeg sidecar binary ---------------------------------
+      # Tauri "externalBin" sidecars must be named
+      #   <name>-<rust-target-triple>[.exe]
+      # and live in src-tauri/binaries/ before `tauri build` runs.
+      - name: Fetch ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          $zip = "ffmpeg.zip"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath ffmpeg-extract -Force
+          $exe = Get-ChildItem -Recurse -Path ffmpeg-extract -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $exe.FullName "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}.exe"
+
+      - name: Fetch ffmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p src-tauri/binaries
+          curl -L "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o ffmpeg.zip
+          unzip -o ffmpeg.zip -d ffmpeg-extract
+          cp ffmpeg-extract/ffmpeg "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}"
+          chmod +x "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}"
+
+      # --- Generate proper app icons (icns/ico/png) from the source art ----
+      - name: Generate icons
+        run: npx tauri icon icon-source.png
+
+      # --- Build & publish -------------------------------------------------
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Audio Converter ${{ github.ref_name }}"
+          releaseBody: |
+            Automated build from commit ${{ github.sha }}.
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.rust-target }}

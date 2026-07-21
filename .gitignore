@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# Rust
+src-tauri/target/
+
+# Sidecar binaries fetched at build time (see CI workflow)
+src-tauri/binaries/
+
+# OS
+.DS_Store
+Thumbs.db

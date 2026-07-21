@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Audio Converter</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1>Audio Converter</h1>
+        <p class="subtitle">Drop audio files, pick a format, convert.</p>
+      </header>
+
+      <section id="dropzone" class="dropzone">
+        <div class="dropzone__content">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 16V4M12 4l-4 4M12 4l4 4" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <p><strong>Drag &amp; drop</strong> audio files here</p>
+          <p class="or">or</p>
+          <button id="browseBtn" class="btn btn--secondary">Choose files…</button>
+        </div>
+      </section>
+
+      <section class="controls">
+        <label for="formatSelect">Convert to</label>
+        <select id="formatSelect">
+          <option value="mp3">MP3</option>
+          <option value="wav">WAV</option>
+          <option value="flac">FLAC</option>
+          <option value="ogg">OGG (Vorbis)</option>
+          <option value="opus">Opus</option>
+          <option value="m4a">M4A (AAC)</option>
+          <option value="aac">AAC</option>
+          <option value="wma">WMA</option>
+          <option value="aiff">AIFF</option>
+        </select>
+        <button id="convertBtn" class="btn btn--primary" disabled>Convert all</button>
+        <button id="clearBtn" class="btn btn--ghost" disabled>Clear</button>
+      </section>
+
+      <section class="filelist" id="filelist" aria-live="polite"></section>
+    </main>
+
+    <script src="main.js"></script>
+  </body>
+</html>
