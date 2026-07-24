@@ -6,8 +6,9 @@ binary ("sidecar") — no separate ffmpeg install required on the end user's
 machine.
 
 Stack: Tauri v2 (Rust backend) + plain HTML/CSS/JS frontend (no bundler
-needed). GitHub Actions builds and releases signed-less installers for
-macOS (Intel + Apple Silicon) and Windows on every push to `main`.
+needed). GitHub Actions builds and releases installers for macOS (Intel +
+Apple Silicon) and Windows when you push a version tag; macOS builds are
+code-signed and notarized when the Apple Developer secrets below are set.
 
 ## Project layout
 
@@ -103,6 +104,14 @@ git push --tags
   these repo secrets are set (same as
   `archivist-claude-podcast-installer`): `APPLE_CERTIFICATE`,
   `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`,
-  `APPLE_PASSWORD`, and `APPLE_TEAM_ID`. Without them, macOS Gatekeeper will
-  block the app with a misleading "damaged" error — clear quarantine with
-  `xattr -cr "/Applications/Audio Converter.app"` as a workaround.
+  `APPLE_PASSWORD`, and `APPLE_TEAM_ID`.
+  - **Installing a signed release.** After downloading from GitHub, drag the
+    app to Applications and open it once. macOS may show the usual Gatekeeper
+    prompt that the developer cannot be verified (not the old misleading
+    “damaged” message from unsigned downloads). Either right-click the app →
+    **Open** → **Open**, or go to **System Settings → Privacy & Security**
+    and use **Open Anyway**.
+  - **Unsigned local or CI builds.** Without those secrets, Gatekeeper may
+    still block the app (sometimes with a “damaged” error). For development
+    only, you can clear quarantine with
+    `xattr -cr "/Applications/Audio Converter.app"`.
