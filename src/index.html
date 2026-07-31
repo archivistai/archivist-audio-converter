@@ -9,8 +9,11 @@
   <body>
     <main class="app">
       <header class="app__header">
-        <h1>Audio Converter</h1>
-        <p class="subtitle">Drop audio files, pick a format, convert.</p>
+        <img src="archivist-logo.png" alt="Archivist" class="app__logo" />
+        <div class="app__titles">
+          <h1>Archivist Audio Converter</h1>
+          <p class="subtitle">Drop audio files, pick a format, convert.</p>
+        </div>
       </header>
 
       <section id="dropzone" class="dropzone">
@@ -28,15 +31,19 @@
       <section class="controls">
         <label for="formatSelect">Convert to</label>
         <select id="formatSelect">
-          <option value="mp3">MP3</option>
-          <option value="wav">WAV</option>
-          <option value="flac">FLAC</option>
-          <option value="ogg">OGG (Vorbis)</option>
-          <option value="opus">Opus</option>
-          <option value="m4a">M4A (AAC)</option>
-          <option value="aac">AAC</option>
-          <option value="wma">WMA</option>
-          <option value="aiff">AIFF</option>
+          <optgroup label="Supported by Archivist">
+            <option value="m4a">M4A (AAC)</option>
+            <option value="mp3" selected>MP3</option>
+            <option value="opus">Opus</option>
+            <option value="wav">WAV</option>
+          </optgroup>
+          <optgroup label="Not supported by Archivist">
+            <option value="aac">AAC</option>
+            <option value="aiff">AIFF</option>
+            <option value="flac">FLAC</option>
+            <option value="ogg">OGG (Vorbis)</option>
+            <option value="wma">WMA</option>
+          </optgroup>
         </select>
         <button id="convertBtn" class="btn btn--primary" disabled>Convert all</button>
         <button id="clearBtn" class="btn btn--ghost" disabled>Clear</button>

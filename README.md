@@ -14,7 +14,7 @@ code-signed and notarized when the Apple Developer secrets below are set.
 
 ```
 audio-converter/
-├── src/                     # frontend (plain HTML/CSS/JS)
+├── src/                     # frontend (plain HTML/CSS/JS + archivist-logo.png)
 ├── src-tauri/
 │   ├── src/main.rs          # Rust commands (spawns the ffmpeg sidecar)
 │   ├── tauri.conf.json
@@ -53,7 +53,13 @@ audio-converter/
   format-appropriate codec (e.g. `libmp3lame` for MP3, `libvorbis` for OGG),
   writing the output next to the source file and auto-numbering to avoid
   overwriting existing files.
-- Supported target formats: MP3, WAV, FLAC, OGG, Opus, M4A, AAC, WMA, AIFF.
+- Target formats are grouped in the dropdown by whether Archivist accepts them
+  as a session upload, alphabetical within each group:
+  - **Supported by Archivist**: M4A, MP3, Opus, WAV
+  - **Not supported by Archivist**: AAC, AIFF, FLAC, OGG, WMA
+  The grouping mirrors `src/lib/audio/contentType.js` in the Archivist app —
+  update it here if the upload validator there changes. Archivist also accepts
+  MP2 and WebM uploads, but this converter doesn't offer them as targets yet.
   Input format is unrestricted — ffmpeg reads almost anything.
 
 ## CI/CD: what happens on every push to `main`

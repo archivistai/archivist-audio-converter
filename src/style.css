@@ -45,6 +45,19 @@ body {
   gap: 16px;
 }
 
+.app__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app__logo {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  opacity: 0.92;
+}
+
 .app__header h1 {
   margin: 0;
   font-size: 19px;
@@ -130,6 +143,23 @@ select {
 
 .controls select {
   margin-right: auto;
+}
+
+select optgroup {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  background: var(--bg-inset);
+}
+
+select option {
+  font-family: var(--mono);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
 }
 
 /* ---- Buttons ---- */
