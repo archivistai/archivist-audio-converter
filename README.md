@@ -165,7 +165,7 @@ Craig and USB-mic recordings do not have.
 To cut a release:
 ```
 # bump the version in src-tauri/tauri.conf.json first, then:
-git tag v0.1.0
+git tag v0.2.0
 git push --tags
 ```
 
