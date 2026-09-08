@@ -39,10 +39,12 @@ body {
 
 .app {
   height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 22px 24px 18px;
   gap: 16px;
+  overflow-y: auto;
 }
 
 .app__header {
@@ -218,7 +220,8 @@ select option {
 /* ---- File list ---- */
 
 .filelist {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 4.5rem;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -318,11 +321,15 @@ select option {
 
 /* Scrollbar */
 
-.filelist::-webkit-scrollbar {
+.app::-webkit-scrollbar,
+.filelist::-webkit-scrollbar,
+.advanced__body::-webkit-scrollbar {
   width: 8px;
 }
 
-.filelist::-webkit-scrollbar-thumb {
+.app::-webkit-scrollbar-thumb,
+.filelist::-webkit-scrollbar-thumb,
+.advanced__body::-webkit-scrollbar-thumb {
   background: var(--line-strong);
   border-radius: 4px;
 }
@@ -341,7 +348,21 @@ select option {
   background: var(--bg-raised);
   border: 1px solid var(--line);
   border-radius: 8px;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.advanced[open] {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.advanced__body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
 }
 
 .advanced > summary {
@@ -354,6 +375,7 @@ select option {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex-shrink: 0;
 }
 
 .advanced > summary::-webkit-details-marker {
