@@ -1,9 +1,12 @@
 # Audio Converter
 
-A small Tauri desktop app: drag-and-drop (or browse for) audio files and
-convert them to another format. Conversion is done by a bundled `ffmpeg`
-binary ("sidecar") — no separate ffmpeg install required on the end user's
-machine.
+A small Tauri desktop app: drag-and-drop (or browse for) audio files, clean
+them up, and convert them to another format. It is aimed at people preparing
+multi-speaker recordings — long tabletop-RPG sessions, interviews, podcasts —
+for **speaker diarization and transcription**: it removes background noise,
+lifts quiet speakers, and normalizes loudness. All processing is done by
+bundled `ffmpeg`/`ffprobe` binaries ("sidecars") — no separate ffmpeg install
+required on the end user's machine.
 
 Stack: Tauri v2 (Rust backend) + plain HTML/CSS/JS frontend (no bundler
 needed). GitHub Actions builds and releases installers for macOS (Intel +
@@ -16,7 +19,13 @@ code-signed and notarized when the Apple Developer secrets below are set.
 audio-converter/
 ├── src/                     # frontend (plain HTML/CSS/JS + archivist-logo.png)
 ├── src-tauri/
-│   ├── src/main.rs          # Rust commands (spawns the ffmpeg sidecar)
+│   ├── src/
+│   │   ├── main.rs          # Tauri commands + two-pass orchestration
+│   │   ├── chain.rs         # filter-chain builder + presets (pure, unit-tested)
+│   │   ├── ffmpeg.rs        # sidecar runner: progress, loudness JSON, ffprobe
+│   │   ├── jobs.rs          # running-child registry, for cancel
+│   │   └── paths.rs         # output naming, self-deleting temp files
+│   ├── models/sh.rnnn       # bundled RNNoise model for the neural denoiser
 │   ├── tauri.conf.json
 │   ├── capabilities/        # Tauri v2 permission grants
 │   └── icons/                # app icons (placeholders — see below)
@@ -37,22 +46,95 @@ audio-converter/
    ```
    npm run icon
    ```
-5. Get an `ffmpeg` binary for **your** platform and place it at
-   `src-tauri/binaries/ffmpeg-<target-triple>` (see the CI workflow for the
-   exact triples/filenames, or run `rustc -Vv | grep host` to find yours).
-   This step is what the CI pipeline automates for release builds — locally
-   you just need one binary for `tauri dev`/`tauri build` to work.
+5. Get `ffmpeg` **and** `ffprobe` for **your** platform and place them at
+   `src-tauri/binaries/ffmpeg-<target-triple>` and
+   `src-tauri/binaries/ffprobe-<target-triple>` (run `rustc -Vv | grep host`
+   to find your triple). This is what the CI pipeline automates for release
+   builds — locally you just need the pair for `tauri dev`/`tauri build`.
+
+   On macOS, get them from `ffmpeg.martin-riedl.de`, **not** `evermeet.cx`:
+   evermeet ships x86_64 only, so an Apple Silicon build made from it runs
+   under Rosetta 2 and the neural denoiser becomes 3-5× slower. CI asserts
+   the architecture with `lipo -archs` and fails the build on a mismatch.
 6. `npm run dev` to run it locally, or `npm run build` to produce an
    installer in `src-tauri/target/release/bundle/`.
+
+## How cleanup works
+
+Presets are defined in `src-tauri/src/chain.rs` (one definition, covered by
+tests) and the UI loads them via the `preset_options` command, so the Advanced
+panel is always pre-populated from the chosen preset.
+
+|  | Transcription / Diarization | Podcast | Light touch |
+|---|---|---|---|
+| high-pass | 70 Hz | 70 Hz | 70 Hz |
+| denoise | `arnndn` mix 0.85 | `arnndn` mix 0.7 | off |
+| level speakers | `speechnorm e=6:c=1` | `speechnorm e=4:c=2` | off |
+| compression | off | gentle `acompressor` | off |
+| loudness | one fixed gain, −19 LUFS | EBU R128, −16 LUFS | EBU R128, −16 LUFS |
+| output | 16 kHz mono | 48 kHz, channels kept | source |
+| ffmpeg passes | 2 (+ intermediate) | 2 (+ intermediate) | 2, no intermediate |
+
+Chain order is repair → downmix → spectral → denoise → dynamics → rate
+conversion → loudness → limiter. Several of those positions are load-bearing,
+and the tests in `chain.rs` exist to keep them that way:
+
+- **The rate conversion must follow `arnndn`**, which is hard-constrained to
+  48 kHz. Place a 16 kHz downsample earlier and ffmpeg silently inserts an
+  upsample back to 48 kHz: you lose the band, pay two resamples, and see no
+  error.
+- **It must also sit inside the measured segment.** Downsampling discards
+  everything above the new Nyquist limit, which changes the loudness; measuring
+  at 48 kHz and rendering at 16 kHz left a test file 3.2 dB off target.
+- **The limiter is last of all.** Resampling and lossy encoding both overshoot,
+  so a limiter placed earlier does not bound what reaches the file.
+- **`alimiter` needs `level=false`.** It auto-levels *up* to the ceiling by
+  default, which discards the computed gain — measured, the default pushed a
+  −19 LUFS render to +0.2 dBFS.
+- **`speechnorm` needs an explicit `c`.** It defaults to 2, i.e. 2× downward
+  compression, flattening exactly the loud/quiet speaker differences that
+  diarization depends on.
+- **Hum notches need a high Q.** `t=q:w=1` reads as Q=1, roughly 60 Hz wide,
+  which strips 10–23 dB of voice fundamental (male F0 is 85–180 Hz). The
+  notches use `w=14`.
+
+Two passes, but the expensive chain runs only **once**: pass A renders through
+an `asplit` whose second branch is `loudnorm=print_format=json`, so the
+measurement comes from the same render. Pass B then only applies gain and
+encodes. When no denoiser is enabled the chain is cheap enough to run twice, so
+Light touch skips the intermediate entirely.
+
+The intermediate is 24-bit FLAC written at the final rate and channel count —
+for a 16 kHz mono target that is a small fraction of the source, sidestepping
+WAV's 4 GB ceiling on multi-hour files. It deletes itself on success, failure
+and cancel, and a sweep clears orphans left by a hard kill.
+
+**Deliberately absent:** silence trimming (`silenceremove` deletes samples, so
+every timestamp after the first cut is wrong) and noise gating (`agate` clips
+soft speech and inserts transients that VAD and speaker-change detection
+misread as boundaries). `speechnorm` solves the level problem without either.
+
+`adeclick`/`adeclip` are opt-in rather than preset defaults: `adeclick` adds
+~68% to wall-clock time and targets vinyl/tape impulsive defects that Discord,
+Craig and USB-mic recordings do not have.
 
 ## How conversion works
 
 - The frontend lists files via native OS drag-and-drop or a file picker
   (`@tauri-apps/plugin-dialog`).
-- `convert_audio_file` (Rust) shells out to the bundled ffmpeg sidecar with a
+- `process_audio_file` (Rust) shells out to the bundled ffmpeg sidecar with a
   format-appropriate codec (e.g. `libmp3lame` for MP3, `libvorbis` for OGG),
   writing the output next to the source file and auto-numbering to avoid
-  overwriting existing files.
+  overwriting existing files. Cleaned output gets a ` - clean` suffix so it
+  never shadows a plain conversion of the same source.
+- Files are processed one at a time on purpose: the neural denoiser is
+  CPU-bound, and several concurrent multi-hour jobs would thrash the machine.
+- Progress is real, parsed from `-progress pipe:1`. Note `out_time_ms` is a
+  misnomer that actually carries microseconds — the parser reads `out_time_us`.
+- The `arnndn` model is passed as a **bare relative filename** with ffmpeg's
+  working directory set to the model dir. An absolute path cannot be used:
+  `:` and `\` are filtergraph metacharacters, so `C:\Program Files\...`
+  fails to parse.
 - Target formats are grouped in the dropdown by whether Archivist accepts them
   as a session upload, alphabetical within each group:
   - **Supported by Archivist**: M4A, MP3, Opus, WAV
@@ -68,10 +150,15 @@ audio-converter/
 (`v*.*.*`) and runs a 3-way matrix build (`macos-14` → Apple Silicon,
 `macos-13` → Intel, `windows-latest`). For each platform it:
 
-1. Downloads a static `ffmpeg` build and stages it as the Tauri sidecar
-   binary.
-2. Regenerates app icons from `icon-source.png`.
-3. Runs [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)
+1. Downloads static `ffmpeg` **and** `ffprobe` builds and stages them as Tauri
+   sidecar binaries.
+2. On macOS, asserts each binary's architecture with `lipo -archs` and fails
+   the build on a mismatch.
+3. Smoke-tests the real cleanup filtergraph against the real bundled model, so
+   an upstream ffmpeg option rename or a missing model fails here in seconds
+   rather than in someone's 4-hour session.
+4. Regenerates app icons from `icon-source.png`.
+5. Runs [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)
    to build the app and publish installers as assets on a GitHub Release
    tagged with the pushed tag name.
 
@@ -87,19 +174,26 @@ git push --tags
 - **Version consistency.** The git tag and `tauri.conf.json`'s `version`
   field aren't linked automatically — bump the latter before tagging so the
   built app reports the same version as the release.
-- **Third-party ffmpeg builds.** The workflow pulls prebuilt static ffmpeg
-  binaries from `gyan.dev` (Windows) and `evermeet.cx` (macOS) — long-running
-  community projects, but not under Anthropic's or your control. If a URL
-  ever goes stale, the "Fetch ffmpeg" step will fail with a clear download
-  error; swap in a different static-build source (e.g.
-  `https://www.osxexperts.net` for native arm64 macOS builds, or
-  `BtbN/FFmpeg-Builds` on GitHub for Windows/Linux) in that step.
-- **Apple Silicon note.** The macOS ffmpeg binary used here is a single
-  build from evermeet.cx; if at some point it's Intel-only rather than
-  universal, it'll still run on Apple Silicon Macs via Rosetta 2 (usually
-  auto-installed on first launch of an Intel binary). If you want to avoid
-  that prompt entirely, source a native `arm64` static build instead for the
-  `macos-14` leg.
+- **Third-party ffmpeg builds.** The workflow pulls prebuilt static binaries
+  from `gyan.dev` (Windows, the "essentials" zip, which contains both ffmpeg
+  and ffprobe) and `ffmpeg.martin-riedl.de` (macOS, native arm64 and amd64) —
+  long-running community projects, but not under your control. The macOS fetch
+  retries on transient 404s. If a URL goes stale the fetch step fails with a
+  clear download error; `BtbN/FFmpeg-Builds` on GitHub is a reasonable
+  alternative.
+- **Apple Silicon: this was a real bug, don't reintroduce it.** The workflow
+  previously fetched from `evermeet.cx` for *both* macOS legs, but that project
+  ships **x86_64 only** (`file` on the download reports
+  `Mach-O 64-bit executable x86_64`) while the workflow staged it as
+  `ffmpeg-aarch64-apple-darwin`. Apple Silicon users were therefore running
+  ffmpeg under Rosetta 2. That was merely slow for remuxing; with the neural
+  denoiser it turns a ~13-minute job into 30-60 minutes, or fails outright on a
+  Mac without Rosetta. The `lipo -archs` assertion in CI is what now prevents
+  this — do not remove it.
+- **ffmpeg version drift.** The macOS source serves "latest" rather than a
+  pinned version. Rather than pin a URL that will eventually 404, the CI smoke
+  test runs the actual cleanup chain, which catches an option rename or a
+  behaviour change immediately.
 - **ffmpeg licensing.** These static builds typically include GPL-licensed
   components (e.g. libx264). Redistributing them means your app's
   distribution needs to comply with the GPL (e.g. making corresponding

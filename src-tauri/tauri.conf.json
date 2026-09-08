@@ -34,8 +34,8 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/ffmpeg"],
-    "resources": [],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": ["models/sh.rnnn"],
     "macOS": {
       "minimumSystemVersion": "10.15"
     },

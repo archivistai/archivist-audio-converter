@@ -20,9 +20,13 @@ jobs:
           - platform: macos-14 # Apple Silicon runner
             rust-target: aarch64-apple-darwin
             sidecar-target: aarch64-apple-darwin
+            sidecar-arch: arm64 # ffmpeg download flavour
+            expect-arch: arm64 # asserted with `lipo -archs`
           - platform: macos-13 # Intel runner
             rust-target: x86_64-apple-darwin
             sidecar-target: x86_64-apple-darwin
+            sidecar-arch: amd64
+            expect-arch: x86_64
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
             sidecar-target: x86_64-pc-windows-msvc
@@ -57,7 +61,7 @@ jobs:
       # Tauri "externalBin" sidecars must be named
       #   <name>-<rust-target-triple>[.exe]
       # and live in src-tauri/binaries/ before `tauri build` runs.
-      - name: Fetch ffmpeg (Windows)
+      - name: Fetch ffmpeg + ffprobe (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -65,17 +69,71 @@ jobs:
           $zip = "ffmpeg.zip"
           Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath ffmpeg-extract -Force
-          $exe = Get-ChildItem -Recurse -Path ffmpeg-extract -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $exe.FullName "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}.exe"
+          # The essentials zip carries ffmpeg.exe, ffprobe.exe and ffplay.exe; we need the first two.
+          foreach ($tool in @("ffmpeg", "ffprobe")) {
+            $exe = Get-ChildItem -Recurse -Path ffmpeg-extract -Filter "$tool.exe" | Select-Object -First 1
+            if (-not $exe) { throw "$tool.exe not found in the ffmpeg download" }
+            Copy-Item $exe.FullName "src-tauri/binaries/$tool-${{ matrix.sidecar-target }}.exe"
+          }
 
-      - name: Fetch ffmpeg (macOS)
+      # evermeet.cx ships x86_64 ONLY, so using it for the arm64 leg silently produced an
+      # Intel sidecar that ran under Rosetta 2. martin-riedl.de publishes native arm64 and
+      # amd64 builds of both tools; the `lipo` assertion below is what keeps us honest.
+      - name: Fetch ffmpeg + ffprobe (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p src-tauri/binaries
-          curl -L "https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip" -o ffmpeg.zip
-          unzip -o ffmpeg.zip -d ffmpeg-extract
-          cp ffmpeg-extract/ffmpeg "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}"
-          chmod +x "src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}"
+          base="https://ffmpeg.martin-riedl.de/redirect/latest/macos/${{ matrix.sidecar-arch }}/release"
+          for tool in ffmpeg ffprobe; do
+            # The redirect service occasionally 404s transiently; retry rather than fail the release.
+            curl -fL --retry 5 --retry-delay 3 --retry-all-errors \
+              -o "$tool.zip" "$base/$tool.zip"
+            unzip -oq "$tool.zip" -d "extract-$tool"
+            src=$(find "extract-$tool" -type f -name "$tool" | head -1)
+            [ -n "$src" ] || { echo "::error::$tool missing from $base/$tool.zip"; exit 1; }
+            cp "$src" "src-tauri/binaries/$tool-${{ matrix.sidecar-target }}"
+            chmod +x "src-tauri/binaries/$tool-${{ matrix.sidecar-target }}"
+          done
+
+      - name: Assert sidecar architecture (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for tool in ffmpeg ffprobe; do
+            bin="src-tauri/binaries/$tool-${{ matrix.sidecar-target }}"
+            got=$(lipo -archs "$bin")
+            echo "$tool: $got"
+            if [ "$got" != "${{ matrix.expect-arch }}" ]; then
+              echo "::error::$tool is '$got' but this build needs '${{ matrix.expect-arch }}'."
+              echo "::error::Shipping a mismatched binary forces Rosetta 2, which makes the"
+              echo "::error::arnndn denoise pass 3-5x slower. Refusing to build."
+              exit 1
+            fi
+          done
+
+      # Runs the real cleanup filtergraph with the real model, so an upstream ffmpeg option
+      # rename, a missing model file, or a broken sidecar fails here in seconds rather than
+      # in a user's 4-hour session.
+      - name: Smoke-test the cleanup chain
+        shell: bash
+        run: |
+          suffix=""
+          [ "$RUNNER_OS" = "Windows" ] && suffix=".exe"
+          ff="$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix"
+          probe="$PWD/src-tauri/binaries/ffprobe-${{ matrix.sidecar-target }}$suffix"
+
+          "$probe" -version > /dev/null || { echo "::error::ffprobe is not runnable"; exit 1; }
+
+          # arnndn takes the model as a bare relative filename; the filtergraph parser treats
+          # ':' and '\' as metacharacters, so an absolute Windows path cannot be passed here.
+          cd src-tauri/models
+          out=$("$ff" -hide_banner -nostdin -nostats -f lavfi -i "sine=d=1:r=48000" \
+            -filter_complex "[0:a]highpass=f=70:poles=2,equalizer=f=60:t=q:w=14:g=-24,aresample=48000,arnndn=m=sh.rnnn:mix=0.85,speechnorm=e=6:c=1:r=0.0001:l=1,asplit=2[a][b];[b]loudnorm=I=-16:TP=-1.5:LRA=20:print_format=json[m]" \
+            -map "[a]" -f null - -map "[m]" -f null - 2>&1) || {
+              echo "::error::cleanup chain failed to run"; echo "$out"; exit 1; }
+
+          echo "$out" | grep -q '"input_i"' || {
+            echo "::error::loudnorm printed no measurement JSON"; echo "$out"; exit 1; }
+          echo "Cleanup chain OK on $("$ff" -hide_banner -version | head -1)"
 
       # --- Generate proper app icons (icns/ico/png) from the source art ----
       - name: Generate icons

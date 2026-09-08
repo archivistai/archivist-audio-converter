@@ -12,7 +12,7 @@
         <img src="archivist-logo.png" alt="Archivist" class="app__logo" />
         <div class="app__titles">
           <h1>Archivist Audio Converter</h1>
-          <p class="subtitle">Drop audio files, pick a format, convert.</p>
+          <p class="subtitle">Clean up multi-speaker recordings, then convert.</p>
         </div>
       </header>
 
@@ -29,6 +29,14 @@
       </section>
 
       <section class="controls">
+        <label for="presetSelect">Cleanup</label>
+        <select id="presetSelect">
+          <option value="transcription" selected>Transcription &amp; diarization</option>
+          <option value="podcast">Podcast / listenable</option>
+          <option value="light">Light touch — normalize only</option>
+          <option value="none">None — just convert</option>
+        </select>
+
         <label for="formatSelect">Convert to</label>
         <select id="formatSelect">
           <optgroup label="Supported by Archivist">
@@ -45,6 +53,121 @@
             <option value="wma">WMA</option>
           </optgroup>
         </select>
+      </section>
+
+      <p class="preset-note" id="presetNote"></p>
+
+      <details class="advanced" id="advanced">
+        <summary>Advanced cleanup settings</summary>
+        <div class="advanced__grid">
+          <label class="field field--check">
+            <input type="checkbox" id="optSpeechnorm" />
+            <span>
+              Level out quiet speakers
+              <em>Raises soft voices without gating. The main fix for uneven mic levels.</em>
+            </span>
+          </label>
+
+          <label class="field">
+            <span>Noise reduction</span>
+            <select id="optDenoise">
+              <option value="off">Off</option>
+              <option value="spectral">Spectral — fast, gentler</option>
+              <option value="neural">Neural — best on speech, slower</option>
+            </select>
+            <em>Neural runs at roughly 20&times; realtime, so a 4-hour session takes ~12 min.</em>
+          </label>
+
+          <label class="field">
+            <span>Keep original room tone <output id="optMixOut"></output></span>
+            <input type="range" id="optMix" min="0.5" max="1" step="0.05" />
+            <em>Below 100% leaves a little ambience. Full strength can swallow quiet
+              interjections, which hurts speaker separation.</em>
+          </label>
+
+          <label class="field">
+            <span>Remove mains hum</span>
+            <select id="optHum">
+              <option value="0">Off</option>
+              <option value="60">60 Hz (North America)</option>
+              <option value="50">50 Hz (Europe, Asia, most elsewhere)</option>
+            </select>
+            <em>Narrow notches on the fundamental and its first two harmonics.</em>
+          </label>
+
+          <label class="field">
+            <span>High-pass filter <output id="optHighpassOut"></output></span>
+            <input type="range" id="optHighpass" min="0" max="120" step="5" />
+            <em>Clears rumble, HVAC and desk thumps. Above ~85 Hz starts thinning
+              lower voices.</em>
+          </label>
+
+          <label class="field">
+            <span>Loudness</span>
+            <select id="optLoudness">
+              <option value="off">Leave levels alone</option>
+              <option value="static">One fixed gain (keeps speaker differences)</option>
+              <option value="ebu">EBU R128 target</option>
+            </select>
+            <em>Fixed gain is the safer choice for diarization; R128 hits a broadcast
+              target more exactly.</em>
+          </label>
+
+          <label class="field">
+            <span>Target loudness <output id="optLufsOut"></output></span>
+            <input type="range" id="optLufs" min="-31" max="-9" step="1" />
+          </label>
+
+          <label class="field">
+            <span>Output sample rate</span>
+            <select id="optRate">
+              <option value="0">Same as source</option>
+              <option value="16000">16 kHz — speech recognition</option>
+              <option value="44100">44.1 kHz</option>
+              <option value="48000">48 kHz</option>
+            </select>
+          </label>
+
+          <label class="field field--check">
+            <input type="checkbox" id="optMono" />
+            <span>
+              Downmix to mono
+              <em>What Whisper and pyannote expect. Also halves processing time.</em>
+            </span>
+          </label>
+
+          <label class="field field--check">
+            <input type="checkbox" id="optCompressor" />
+            <span>
+              Gentle compression
+              <em>Evens out delivery for listening. Skip it for transcription.</em>
+            </span>
+          </label>
+
+          <label class="field field--check">
+            <input type="checkbox" id="optDeclick" />
+            <span>
+              Remove clicks and crackle
+              <em>For vinyl or tape defects. Adds ~70% to processing time and does
+                nothing for Discord or USB-mic audio.</em>
+            </span>
+          </label>
+
+          <label class="field field--check">
+            <input type="checkbox" id="optDeclip" />
+            <span>
+              Repair clipping
+              <em>Only helps if the recording was already peaking into distortion.</em>
+            </span>
+          </label>
+        </div>
+        <p class="advanced__foot">
+          Silence trimming and noise gating are deliberately absent: cutting silence breaks
+          transcript timestamps, and gating clips soft speech.
+        </p>
+      </details>
+
+      <section class="actions">
         <button id="convertBtn" class="btn btn--primary" disabled>Convert all</button>
         <button id="clearBtn" class="btn btn--ghost" disabled>Clear</button>
       </section>
