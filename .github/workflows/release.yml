@@ -22,7 +22,7 @@ jobs:
             sidecar-target: aarch64-apple-darwin
             sidecar-arch: arm64 # ffmpeg download flavour
             expect-arch: arm64 # asserted with `lipo -archs`
-          - platform: macos-13 # Intel runner
+          - platform: macos-15-intel # last GitHub-hosted Intel runner (macos-13 retired)
             rust-target: x86_64-apple-darwin
             sidecar-target: x86_64-apple-darwin
             sidecar-arch: amd64

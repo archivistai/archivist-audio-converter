@@ -148,7 +148,7 @@ Craig and USB-mic recordings do not have.
 
 `.github/workflows/release.yml` triggers on pushing a version tag
 (`v*.*.*`) and runs a 3-way matrix build (`macos-14` → Apple Silicon,
-`macos-13` → Intel, `windows-latest`). For each platform it:
+`macos-15-intel` → Intel, `windows-latest`). For each platform it:
 
 1. Downloads static `ffmpeg` **and** `ffprobe` builds and stages them as Tauri
    sidecar binaries.
@@ -165,7 +165,7 @@ Craig and USB-mic recordings do not have.
 To cut a release:
 ```
 # bump the version in src-tauri/tauri.conf.json first, then:
-git tag v0.2.0
+git tag v0.2.1
 git push --tags
 ```
 
