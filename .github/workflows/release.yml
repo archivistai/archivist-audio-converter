@@ -38,11 +38,17 @@ jobs:
     env:
       # Pinned: FFmpeg 9.x hangs on arnndn -> speechnorm (see README, "ffmpeg version drift").
       FFMPEG_VERSION: "8.0.1"
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_BASE64 }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      # Signing credentials are only ever exposed to non-PR events. Pull-request runs execute
+      # branch-controlled code (npm, cargo test, the smoke script) and must never see them.
+      APPLE_CERTIFICATE: ${{ github.event_name != 'pull_request' && (secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_BASE64) || '' }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
 
     steps:
+      # Nothing here pushes to git, and the release step authenticates with its own
+      # GITHUB_TOKEN env, so don't leave the write-scoped token in .git/config for PR code.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node
         uses: actions/setup-node@v4
