@@ -7,6 +7,7 @@ on:
   push:
     tags: ["v*.*.*"]
   workflow_dispatch: {}
+  pull_request: {}
 
 permissions:
   contents: write
@@ -110,37 +111,28 @@ jobs:
             fi
           done
 
-      # Runs the real cleanup filtergraph with the real model, so an upstream ffmpeg option
-      # rename, a missing model file, or a broken sidecar fails here in seconds rather than
-      # in a user's 4-hour session.
-      - name: Smoke-test the cleanup chain
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Smoke-test cleanup, measurement and encoding
         shell: bash
         run: |
           suffix=""
           [ "$RUNNER_OS" = "Windows" ] && suffix=".exe"
-          ff="$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix"
-          probe="$PWD/src-tauri/binaries/ffprobe-${{ matrix.sidecar-target }}$suffix"
-
-          "$probe" -version > /dev/null || { echo "::error::ffprobe is not runnable"; exit 1; }
-
-          # arnndn takes the model as a bare relative filename; the filtergraph parser treats
-          # ':' and '\' as metacharacters, so an absolute Windows path cannot be passed here.
-          cd src-tauri/models
-          out=$("$ff" -hide_banner -nostdin -nostats -f lavfi -i "sine=d=1:r=48000" \
-            -filter_complex "[0:a]highpass=f=70:poles=2,equalizer=f=60:t=q:w=14:g=-24,aresample=48000,arnndn=m=sh.rnnn:mix=0.85,speechnorm=e=6:c=1:r=0.0001:l=1,asplit=2[a][b];[b]loudnorm=I=-16:TP=-1.5:LRA=20:print_format=json[m]" \
-            -map "[a]" -f null - -map "[m]" -f null - 2>&1) || {
-              echo "::error::cleanup chain failed to run"; echo "$out"; exit 1; }
-
-          echo "$out" | grep -q '"input_i"' || {
-            echo "::error::loudnorm printed no measurement JSON"; echo "$out"; exit 1; }
-          echo "Cleanup chain OK on $("$ff" -hide_banner -version | head -1)"
+          python scripts/smoke-cleanup.py \
+            "$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix" \
+            "$PWD/src-tauri/binaries/ffprobe-${{ matrix.sidecar-target }}$suffix"
 
       # --- Generate proper app icons (icns/ico/png) from the source art ----
       - name: Generate icons
         run: npx tauri icon icon-source.png
 
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+
       - name: Import Apple Developer certificate
-        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        if: github.event_name != 'pull_request' && runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
         run: |
           KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
           echo "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12
@@ -157,6 +149,7 @@ jobs:
 
       # --- Build & publish -------------------------------------------------
       - name: Build and release
+        if: github.event_name != 'pull_request'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

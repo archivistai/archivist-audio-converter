@@ -26,6 +26,7 @@ const CLEAN_SUFFIX: &str = " - clean";
 
 /// Pass A carries essentially all the cost, so the bar reflects that rather than splitting
 /// evenly and appearing to stall.
+const CLEANUP_SHARE: f64 = 0.85;
 const PASS_A_SHARE: f64 = 0.92;
 
 #[derive(Serialize, Clone)]
@@ -233,32 +234,18 @@ async fn run_job(
 
     if cleanup.needs_measurement() {
         if cleanup.needs_intermediate() {
-            // The denoiser is far too costly to run twice, so render once into an
-            // intermediate while measuring the same graph through an `asplit` branch.
-            //
-            // FLAC rather than WAV: ~60% the size, no 4 GB container limit, negligible
-            // encode cost against the chain, and 24-bit keeps headroom for the gain-up.
-            // It already carries the final rate and channel count, so for a 16 kHz mono
-            // target it is a small fraction of the source size.
-            // Clear any intermediate a previous hard kill left behind here before adding
-            // another; `Drop` cannot run when the process is killed outright.
+            // Keep cleanup and measurement in separate processes. A shared asplit graph
+            // couples the FLAC writer to loudnorm's buffering and EOF flush, making the
+            // cleanup -> encoding boundary vulnerable to a stalled branch.
+            // The expensive denoiser still runs only once.
             if let Some(parent) = output.parent() {
                 paths::sweep_orphans(parent);
             }
             let temp = TempFile::beside(output, "flac");
-            let graph = format!(
-                "[0:a]{},asplit=2[a][b];[b]{}[m]",
+            let mut args = input_args(input_path);
+            args.extend([
+                "-af".to_string(),
                 filters_to_arg(&pre_loudness),
-                cleanup.measurement_filter()
-            );
-            // Explicit filtergraph labels replace the `-map 0:a:0 -vn` form used elsewhere.
-            let args = vec![
-                "-i".to_string(),
-                input_path.to_string(),
-                "-filter_complex".to_string(),
-                graph,
-                "-map".to_string(),
-                "[a]".to_string(),
                 "-c:a".to_string(),
                 "flac".to_string(),
                 "-sample_fmt".to_string(),
@@ -266,12 +253,7 @@ async fn run_job(
                 "-f".to_string(),
                 "flac".to_string(),
                 temp.path().to_string_lossy().to_string(),
-                "-map".to_string(),
-                "[m]".to_string(),
-                "-f".to_string(),
-                "null".to_string(),
-                "-".to_string(),
-            ];
+            ]);
 
             let outcome = run_pass(
                 app,
@@ -282,22 +264,22 @@ async fn run_job(
                 input_path,
                 "Cleaning up",
                 duration_us,
-                (0.0, PASS_A_SHARE),
+                (0.0, CLEANUP_SHARE),
             )
             .await?;
             if let Some(r) = cancelled_result(&outcome, input_path, output, duration_seconds) {
                 return r;
             }
 
-            measured = outcome.loudnorm;
             source = temp.path().to_string_lossy().to_string();
             remaining.clear();
             stage = Some(temp);
-        } else {
-            // Nothing expensive in the chain, so it is cheaper overall to measure in a
-            // throwaway pass and render in one go — no intermediate, no disk-space risk.
-            let mut args = input_args(input_path);
-            let mut graph = pre_loudness.clone();
+        }
+        {
+            // Measure the completed intermediate, or the original with the cheap chain.
+            // Measurement now describes exactly the samples the encoder will read.
+            let mut args = input_args(&source);
+            let mut graph = remaining.clone();
             graph.push(cleanup.measurement_filter());
             args.push("-af".into());
             args.push(filters_to_arg(&graph));
@@ -314,7 +296,11 @@ async fn run_job(
                 input_path,
                 "Analyzing",
                 duration_us,
-                (0.0, 0.5),
+                if stage.is_some() {
+                    (CLEANUP_SHARE, PASS_A_SHARE)
+                } else {
+                    (0.0, 0.5)
+                },
             )
             .await?;
             if let Some(r) = cancelled_result(&outcome, input_path, output, duration_seconds) {
@@ -438,7 +424,7 @@ async fn run_pass(
     duration_us: Option<u64>,
     span: (f64, f64),
 ) -> Result<ffmpeg::RunOutcome, ConversionError> {
-    ffmpeg::run_ffmpeg(
+    let outcome = ffmpeg::run_ffmpeg(
         app,
         jobs,
         job_id,
@@ -452,7 +438,14 @@ async fn run_pass(
         }),
     )
     .await
-    .map_err(|e| ConversionError::new(input_path, e))
+    .map_err(|e| ConversionError::new(input_path, e))?;
+    if !outcome.success && !outcome.cancelled {
+        return Err(ConversionError::new(
+            input_path,
+            explain_failure(&outcome.stderr_tail),
+        ));
+    }
+    Ok(outcome)
 }
 
 /// Short-circuits the pipeline when the user cancelled, without treating it as a failure.

@@ -73,7 +73,7 @@ panel is always pre-populated from the chosen preset.
 | compression | off | gentle `acompressor` | off |
 | loudness | one fixed gain, −19 LUFS | EBU R128, −16 LUFS | EBU R128, −16 LUFS |
 | output | 16 kHz mono | 48 kHz, channels kept | source |
-| ffmpeg passes | 2 (+ intermediate) | 2 (+ intermediate) | 2, no intermediate |
+| ffmpeg passes | 3 (+ intermediate) | 3 (+ intermediate) | 2, no intermediate |
 
 Chain order is repair → downmix → spectral → denoise → dynamics → rate
 conversion → loudness → limiter. Several of those positions are load-bearing,
@@ -98,11 +98,12 @@ and the tests in `chain.rs` exist to keep them that way:
   which strips 10–23 dB of voice fundamental (male F0 is 85–180 Hz). The
   notches use `w=14`.
 
-Two passes, but the expensive chain runs only **once**: pass A renders through
-an `asplit` whose second branch is `loudnorm=print_format=json`, so the
-measurement comes from the same render. Pass B then only applies gain and
-encodes. When no denoiser is enabled the chain is cheap enough to run twice, so
-Light touch skips the intermediate entirely.
+With denoising enabled, three sequential passes keep cleanup, loudness analysis,
+and encoding independent. The expensive cleanup chain runs only **once** into an
+intermediate. Analysis reads that completed file, then encoding applies the measured
+gain or R128 correction. This avoids coupling the intermediate writer to a parallel
+loudnorm branch at end-of-file. Without denoising, analysis and encoding use two
+passes and skip the intermediate.
 
 The intermediate is 24-bit FLAC written at the final rate and channel count —
 for a 16 kHz mono target that is a small fraction of the source, sidestepping
@@ -154,7 +155,7 @@ Craig and USB-mic recordings do not have.
    sidecar binaries.
 2. On macOS, asserts each binary's architecture with `lipo -archs` and fails
    the build on a mismatch.
-3. Smoke-tests the real cleanup filtergraph against the real bundled model, so
+3. Smoke-tests cleanup, measurement and encoding with compression and R128 on/off, so
    an upstream ffmpeg option rename or a missing model fails here in seconds
    rather than in someone's 4-hour session.
 4. Regenerates app icons from `icon-source.png`.
