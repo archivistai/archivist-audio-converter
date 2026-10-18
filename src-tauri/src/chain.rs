@@ -297,9 +297,9 @@ impl CleanupOptions {
 
     /// Whether the processing chain is costly enough that it must not be run twice.
     ///
-    /// When true, the render is done once into a temp file with the measurement taken from
-    /// an `asplit` branch of the same graph. When false, it's cheaper overall to measure in
-    /// a throwaway pass and render in one go — no temp file, no disk-space risk.
+    /// When true, cleanup is rendered once into a temp file, then measured and encoded
+    /// in separate passes. When false, it is cheaper to measure in a throwaway pass and
+    /// render in one go — no temp file, no disk-space risk.
     pub fn needs_intermediate(&self) -> bool {
         self.needs_measurement() && self.denoise != DenoiseKind::Off
     }
