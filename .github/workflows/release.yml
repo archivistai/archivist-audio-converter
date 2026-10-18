@@ -115,6 +115,16 @@ jobs:
         with:
           python-version: '3.x'
 
+      # TEMPORARY diagnostic for the cleanup-render stall; remove once the cause is fixed.
+      - name: Stability probe (cleanup chain hang rate)
+        continue-on-error: true
+        shell: bash
+        run: |
+          suffix=""
+          [ "$RUNNER_OS" = "Windows" ] && suffix=".exe"
+          python scripts/stability-probe.py \
+            "$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix" 6
+
       - name: Smoke-test cleanup, measurement and encoding
         shell: bash
         run: |
