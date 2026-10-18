@@ -5,17 +5,35 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 ff, probe = map(lambda p: str(pathlib.Path(p).resolve()), sys.argv[1:3])
 model_dir = pathlib.Path(__file__).resolve().parents[1] / 'src-tauri' / 'models'
 
 
-def run(*args):
-    result = subprocess.run([ff, '-hide_banner', '-nostdin', '-nostats', '-y', *args],
-                            cwd=model_dir, capture_output=True, text=True, timeout=60)
+def run(*args, timeout=60):
+    try:
+        result = subprocess.run([ff, '-hide_banner', '-nostdin', '-nostats', '-y', *args],
+                                cwd=model_dir, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        tail = e.stderr.decode(errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or '')
+        raise RuntimeError(f'ffmpeg hung for {timeout}s: {args}\n{tail[-2000:]}') from None
     if result.returncode:
         raise RuntimeError(result.stderr)
     return result.stderr
+
+
+def diagnose(source, filters):
+    """Report which filter prefix hangs, so a CI stall names its culprit instead of just timing out."""
+    for i in range(1, len(filters) + 1):
+        start = time.time()
+        try:
+            run('-i', source, '-af', ','.join(filters[:i]), '-f', 'null', '-', timeout=20)
+            verdict = 'ok'
+        except RuntimeError:
+            verdict = 'HUNG'
+        print(f'  diagnose: {filters[i - 1].split("=")[0]:<12} (chain of {i}) {verdict} '
+              f'{time.time() - start:.1f}s', flush=True)
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -31,8 +49,13 @@ with tempfile.TemporaryDirectory() as tmp:
                        'speechnorm=e=6:c=1:r=0.0001:l=1']
             if compressor:
                 filters += ['acompressor=threshold=-18dB:ratio=3:attack=20:release=250:makeup=2']
-            run('-i', source, '-map', '0:a:0', '-vn', '-af', ','.join(filters),
-                '-c:a', 'flac', '-sample_fmt', 's32', stage)
+            try:
+                run('-i', source, '-map', '0:a:0', '-vn', '-af', ','.join(filters),
+                    '-c:a', 'flac', '-sample_fmt', 's32', stage)
+            except RuntimeError as e:
+                print(e, flush=True)
+                diagnose(source, filters)
+                raise
             log = run('-i', stage, '-af', 'loudnorm=I=-15:TP=-1.5:LRA=20:print_format=json',
                       '-f', 'null', '-')
             stats = json.loads(re.search(r'\{[^{}]*"input_i"[^{}]*\}', log).group())
