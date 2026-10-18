@@ -17,23 +17,41 @@ def run(*args, timeout=60):
                                 cwd=model_dir, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         tail = e.stderr.decode(errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or '')
-        raise RuntimeError(f'ffmpeg hung for {timeout}s: {args}\n{tail[-2000:]}') from None
+        raise TimeoutError(f'ffmpeg hung for {timeout}s: {args}\n{tail[-2000:]}') from None
     if result.returncode:
         raise RuntimeError(result.stderr)
     return result.stderr
 
 
-def diagnose(source, filters):
-    """Report which filter prefix hangs, so a CI stall names its culprit instead of just timing out."""
+def try_render(label, source, filters, *out):
+    start = time.time()
+    try:
+        run('-i', source, '-map', '0:a:0', '-vn', '-af', ','.join(filters), *out, timeout=20)
+        verdict = 'ok'
+    except TimeoutError:
+        verdict = 'HUNG'
+    except RuntimeError:
+        verdict = 'ERROR'
+    print(f'  diagnose: {label:<46} {verdict} {time.time() - start:.1f}s', flush=True)
+
+
+def diagnose(root, source, filters):
+    """Name what hangs: which filter, which input signal, which output writer."""
+    speech = str(root / 'speechlike.aac')
+    # Pink noise with a syllable-rate tremolo has pauses and level swings, unlike a steady tone.
+    run('-f', 'lavfi', '-i', 'anoisesrc=d=10:r=48000:c=pink:a=0.3,tremolo=f=4:d=0.9',
+        '-c:a', 'aac', speech)
     for i in range(1, len(filters) + 1):
-        start = time.time()
-        try:
-            run('-i', source, '-af', ','.join(filters[:i]), '-f', 'null', '-', timeout=20)
-            verdict = 'ok'
-        except RuntimeError:
-            verdict = 'HUNG'
-        print(f'  diagnose: {filters[i - 1].split("=")[0]:<12} (chain of {i}) {verdict} '
-              f'{time.time() - start:.1f}s', flush=True)
+        try_render(f'sine, {filters[i - 1].split("=")[0]} (chain of {i}) -> null',
+              source, filters[:i], '-f', 'null', '-')
+    writers = {'flac s32': ('flac', ['-c:a', 'flac', '-sample_fmt', 's32']),
+               'flac s16': ('flac', ['-c:a', 'flac']),
+               'wav 24-bit': ('wav', ['-c:a', 'pcm_s24le']),
+               'null': (None, ['-f', 'null'])}
+    for name, src in (('sine', source), ('speech-like', speech)):
+        for wname, (ext, wargs) in writers.items():
+            target = str(root / f'probe-{wname[:3]}.{ext}') if ext else '-'
+            try_render(f'{name}, full chain -> {wname}', src, filters, *wargs, target)
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -52,9 +70,9 @@ with tempfile.TemporaryDirectory() as tmp:
             try:
                 run('-i', source, '-map', '0:a:0', '-vn', '-af', ','.join(filters),
                     '-c:a', 'flac', '-sample_fmt', 's32', stage)
-            except RuntimeError as e:
+            except TimeoutError as e:
                 print(e, flush=True)
-                diagnose(source, filters)
+                diagnose(root, source, filters)
                 raise
             log = run('-i', stage, '-af', 'loudnorm=I=-15:TP=-1.5:LRA=20:print_format=json',
                       '-f', 'null', '-')
