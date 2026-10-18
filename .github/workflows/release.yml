@@ -22,11 +22,13 @@ jobs:
             rust-target: aarch64-apple-darwin
             sidecar-target: aarch64-apple-darwin
             sidecar-arch: arm64 # ffmpeg download flavour
+            mac-ffmpeg-build: 1766430132_8.0.1 # martin-riedl.de build id (timestamp_version)
             expect-arch: arm64 # asserted with `lipo -archs`
           - platform: macos-15-intel # last GitHub-hosted Intel runner (macos-13 retired)
             rust-target: x86_64-apple-darwin
             sidecar-target: x86_64-apple-darwin
             sidecar-arch: amd64
+            mac-ffmpeg-build: 1766437297_8.0.1
             expect-arch: x86_64
           - platform: windows-latest
             rust-target: x86_64-pc-windows-msvc
@@ -34,6 +36,8 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     env:
+      # Pinned: FFmpeg 9.x hangs on arnndn -> speechnorm (see README, "ffmpeg version drift").
+      FFMPEG_VERSION: "8.0.1"
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE || secrets.APPLE_CERTIFICATE_BASE64 }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
 
@@ -68,7 +72,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
           $zip = "ffmpeg.zip"
-          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $zip
+          Invoke-WebRequest -Uri "https://github.com/GyanD/codexffmpeg/releases/download/$env:FFMPEG_VERSION/ffmpeg-$env:FFMPEG_VERSION-essentials_build.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath ffmpeg-extract -Force
           # The essentials zip carries ffmpeg.exe, ffprobe.exe and ffplay.exe; we need the first two.
           foreach ($tool in @("ffmpeg", "ffprobe")) {
@@ -80,13 +84,14 @@ jobs:
       # evermeet.cx ships x86_64 ONLY, so using it for the arm64 leg silently produced an
       # Intel sidecar that ran under Rosetta 2. martin-riedl.de publishes native arm64 and
       # amd64 builds of both tools; the `lipo` assertion below is what keeps us honest.
+      # The build id pins FFmpeg so a new upstream release cannot change behaviour unseen.
       - name: Fetch ffmpeg + ffprobe (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p src-tauri/binaries
-          base="https://ffmpeg.martin-riedl.de/redirect/latest/macos/${{ matrix.sidecar-arch }}/release"
+          base="https://ffmpeg.martin-riedl.de/download/macos/${{ matrix.sidecar-arch }}/${{ matrix.mac-ffmpeg-build }}"
           for tool in ffmpeg ffprobe; do
-            # The redirect service occasionally 404s transiently; retry rather than fail the release.
+            # The download service occasionally 404s transiently; retry rather than fail the release.
             curl -fL --retry 5 --retry-delay 3 --retry-all-errors \
               -o "$tool.zip" "$base/$tool.zip"
             unzip -oq "$tool.zip" -d "extract-$tool"
@@ -115,15 +120,15 @@ jobs:
         with:
           python-version: '3.x'
 
-      # TEMPORARY diagnostic for the cleanup-render stall; remove once the cause is fixed.
-      - name: Stability probe (cleanup chain hang rate)
-        continue-on-error: true
+      - name: Assert pinned ffmpeg version
         shell: bash
         run: |
           suffix=""
           [ "$RUNNER_OS" = "Windows" ] && suffix=".exe"
-          python scripts/stability-probe.py \
-            "$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix" 6
+          got=$("$PWD/src-tauri/binaries/ffmpeg-${{ matrix.sidecar-target }}$suffix" -version | head -1)
+          echo "$got"
+          echo "$got" | grep -Eq "version ${FFMPEG_VERSION//./\\.}([- ]|$)" || {
+            echo "::error::Expected ffmpeg $FFMPEG_VERSION, got: $got"; exit 1; }
 
       - name: Smoke-test cleanup, measurement and encoding
         shell: bash

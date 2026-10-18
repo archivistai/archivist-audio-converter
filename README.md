@@ -191,10 +191,16 @@ git push --tags
   denoiser it turns a ~13-minute job into 30-60 minutes, or fails outright on a
   Mac without Rosetta. The `lipo -archs` assertion in CI is what now prevents
   this — do not remove it.
-- **ffmpeg version drift.** The macOS source serves "latest" rather than a
-  pinned version. Rather than pin a URL that will eventually 404, the CI smoke
-  test runs the actual cleanup chain, which catches an option rename or a
-  behaviour change immediately.
+- **ffmpeg version drift.** The sidecars are pinned to FFmpeg 8.0.1
+  (`FFMPEG_VERSION` and the per-arch `mac-ffmpeg-build` ids in `release.yml`),
+  and CI asserts the version it actually got. FFmpeg 9.0, 9.0.1 and 9.0.2 hang
+  when `arnndn` feeds `speechnorm`: on Windows the cleanup render stalled in
+  roughly 3 of 4 runs, while 7.0.2 through 8.0.1 never stalled in 32 runs; the
+  Mac 9.0.2 builds stalled occasionally. That is the same symptom as a
+  conversion sticking at "Cleaning up". Before bumping the pin, run the smoke
+  test against the candidate several times, not once — the hang is
+  intermittent on macOS. The smoke test still runs the real cleanup chain, so
+  an option rename or a behaviour change fails CI immediately.
 - **ffmpeg licensing.** These static builds typically include GPL-licensed
   components (e.g. libx264). Redistributing them means your app's
   distribution needs to comply with the GPL (e.g. making corresponding
