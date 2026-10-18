@@ -8,6 +8,7 @@ import time
 ff = str(pathlib.Path(sys.argv[1]).resolve())
 runs = int(sys.argv[2]) if len(sys.argv) > 2 else 6
 timeout = 8
+only = sys.argv[3] if len(sys.argv) > 3 else None  # variant-name prefix filter
 model_dir = pathlib.Path(__file__).resolve().parents[1] / 'src-tauri' / 'models'
 
 HEAD = ['aformat=channel_layouts=mono', 'highpass=f=70:poles=2', 'aresample=48000']
@@ -51,6 +52,8 @@ with tempfile.TemporaryDirectory() as tmp:
     }
     print(f'{"variant":<28}{"source":<13}hung/{runs}  errors  max-ok-s', flush=True)
     for vname, (pre, filters) in VARIANTS.items():
+        if only and not vname.startswith(only):
+            continue
         for sname, source in sources.items():
             res = [render(pre, source, filters) for _ in range(runs)]
             hung = sum(v == 'hung' for v, _ in res)

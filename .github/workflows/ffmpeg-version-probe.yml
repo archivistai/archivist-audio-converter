@@ -1,0 +1,33 @@
+# TEMPORARY diagnostic: does the arnndn -> speechnorm hang depend on the FFmpeg version?
+# Remove together with scripts/stability-probe.py once the sidecar version is settled.
+name: ffmpeg-version-probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ffmpeg-version-probe.yml
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ffmpeg: ["7.0.2", "7.1.1", "8.0", "8.0.1", "9.0", "9.0.1", "9.0.2"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Fetch ffmpeg ${{ matrix.ffmpeg }} (gyan.dev essentials)
+        shell: pwsh
+        run: |
+          $v = "${{ matrix.ffmpeg }}"
+          Invoke-WebRequest -Uri "https://github.com/GyanD/codexffmpeg/releases/download/$v/ffmpeg-$v-essentials_build.zip" -OutFile ffmpeg.zip
+          Expand-Archive -Path ffmpeg.zip -DestinationPath ffmpeg-extract -Force
+          $exe = Get-ChildItem -Recurse -Path ffmpeg-extract -Filter "ffmpeg.exe" | Select-Object -First 1
+          Copy-Item $exe.FullName ffmpeg.exe
+      - name: Hang rate of the current cleanup chain
+        shell: bash
+        run: python scripts/stability-probe.py "$PWD/ffmpeg.exe" 8 baseline
