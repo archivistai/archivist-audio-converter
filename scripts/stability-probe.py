@@ -10,16 +10,16 @@ runs = int(sys.argv[2]) if len(sys.argv) > 2 else 6
 timeout = 8
 model_dir = pathlib.Path(__file__).resolve().parents[1] / 'src-tauri' / 'models'
 
-PRE = ['aformat=channel_layouts=mono', 'highpass=f=70:poles=2', 'aresample=48000',
-       'arnndn=m=sh.rnnn:mix=0.7']
+HEAD = ['aformat=channel_layouts=mono', 'highpass=f=70:poles=2', 'aresample=48000']
+DN = 'arnndn=m=sh.rnnn:mix=0.7'
 SN = 'speechnorm=e=6:c=1:r=0.0001:l=1'
+# Round 2: Windows hangs only when arnndn feeds speechnorm. Try audio-neutral separators.
 VARIANTS = {
-    'baseline (current chain)': ([], PRE + [SN]),
-    'speechnorm default raise': ([], PRE + ['speechnorm=e=6:c=1:l=1']),
-    'speechnorm alone': ([], ['aformat=channel_layouts=mono', SN]),
-    '-filter_threads 1': (['-filter_threads', '1'], PRE + [SN]),
-    '-threads 1': (['-threads', '1'], PRE + [SN]),
-    'no speechnorm': ([], PRE),
+    'baseline (arnndn,speechnorm)': ([], HEAD + [DN, SN]),
+    'asetnsamples between': ([], HEAD + [DN, 'asetnsamples=n=4096:p=0', SN]),
+    'aresample between': ([], HEAD + [DN, 'aresample=48000', SN]),
+    'aformat fltp between': ([], HEAD + [DN, 'aformat=sample_fmts=fltp', SN]),
+    'swapped (speechnorm first)': ([], HEAD + [SN, DN]),
 }
 
 
