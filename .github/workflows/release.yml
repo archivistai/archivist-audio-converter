@@ -174,8 +174,57 @@ jobs:
           security find-identity -v -p codesigning build.keychain
 
       # --- Build & publish -------------------------------------------------
+      # Published as a DRAFT on purpose, and this is the important part.
+      #
+      # The matrix has three legs with `fail-fast: false`, so one leg can fail
+      # while the others succeed. With a non-draft release that is enough to
+      # publish: v0.2.5 went public carrying only the Windows and Intel builds
+      # and NO Apple Silicon artifact, because the arm64 leg died in codesign
+      # while the other two uploaded happily. An Apple Silicon user would have
+      # found only the Intel .dmg - exactly the Rosetta trap the `lipo`
+      # assertion above exists to prevent, routed around by a missing file.
+      #
+      # A draft accumulates assets from every leg and stays invisible until a
+      # human publishes it, so "two of three legs passed" can no longer reach
+      # users. Check all three legs are green, then publish from the Releases
+      # page (or `gh release edit <tag> --draft=false`).
       - name: Build and release
+        id: build
         if: github.event_name != 'pull_request'
+        uses: tauri-apps/tauri-action@v0
+        # Paired with the retry below; the retry is what fails the job if the
+        # second attempt also fails.
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD || secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Audio Converter ${{ github.ref_name }}"
+          releaseBody: |
+            Automated build from commit ${{ github.sha }}.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.rust-target }}
+
+      # `codesign` contacts Apple's secure timestamp authority for every binary
+      # it signs - the app plus both sidecars - and that call fails outright
+      # when Apple is briefly unreachable: "A timestamp was expected but was
+      # not found". It killed the v0.2.5 arm64 leg about 15s into signing the
+      # first sidecar, while the Intel leg signed cleanly 17 minutes later, so
+      # it is a transient network failure rather than a signing misconfiguration
+      # (a bad identity fails instantly, and the log shows the cert was found).
+      #
+      # The cargo build is already done and cached by this point, so a second
+      # attempt only re-runs bundling and signing. This is a convenience, not
+      # the safeguard - the draft above is the safeguard.
+      #
+      # KEEP THE env: AND with: BLOCKS BELOW IDENTICAL TO THE STEP ABOVE.
+      - name: Build and release (retry after a transient codesign failure)
+        if: github.event_name != 'pull_request' && steps.build.outcome == 'failure'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -188,6 +237,6 @@ jobs:
           releaseName: "Audio Converter ${{ github.ref_name }}"
           releaseBody: |
             Automated build from commit ${{ github.sha }}.
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.rust-target }}
