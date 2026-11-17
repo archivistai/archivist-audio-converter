@@ -114,6 +114,81 @@ function syncReadouts() {
   lufsField.classList.toggle("is-muted", el("optLoudness").value === "off");
 }
 
+// --- Remembering the panel ---------------------------------------------------------
+
+// Every control used to reset on launch. Startup calls `loadPreset()`, which overwrites
+// each advanced field, and Convert To / Preset were never restored at all. That is why
+// it looked like only *some* options forgot themselves: the preset re-applied most
+// values, so the two controls it does not govern were the ones that visibly snapped back.
+//
+// localStorage is deliberately the whole mechanism. These are per-machine UI
+// preferences, not data worth a config file or another dependency. Access is wrapped
+// because a webview with storage disabled throws on read rather than returning null.
+const SETTINGS_KEY = "audio-converter.settings.v1";
+
+function readSaved() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null; // storage disabled, cleared, or holding something we didn't write
+  }
+}
+
+function saveSettings() {
+  const fields = {};
+  for (const [key, spec] of Object.entries(FIELDS)) {
+    const node = el(spec.el);
+    fields[key] = spec.kind === "bool" ? node.checked : node.value;
+  }
+  try {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ format: formatSelect.value, preset: presetSelect.value, fields }),
+    );
+  } catch {
+    // Not worth surfacing. The app still works; it just won't remember.
+  }
+}
+
+let saveTimer = null;
+function saveSoon() {
+  // The three sliders fire `input` continuously while dragging.
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveSettings, 200);
+}
+
+// A stored value can outlive the option that produced it - a renamed preset, a denoise
+// mode that gets dropped. Assigning one to a <select> silently leaves it showing
+// nothing, so a value is only restored if the control still offers it.
+function restoreSelect(node, value) {
+  if (typeof value !== "string") return false;
+  if (!Array.from(node.options).some((opt) => opt.value === value)) return false;
+  node.value = value;
+  return true;
+}
+
+function applySavedFields(fields) {
+  if (!fields || typeof fields !== "object") return;
+  for (const [key, spec] of Object.entries(FIELDS)) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue;
+    const node = el(spec.el);
+    const value = fields[key];
+    if (spec.kind === "bool") {
+      node.checked = Boolean(value);
+    } else if (node.tagName === "SELECT") {
+      restoreSelect(node, value);
+    } else {
+      // Range inputs clamp to their own min/max, so a stale bound is harmless; a
+      // non-numeric value is not, and would wipe the slider.
+      const num = Number(value);
+      if (Number.isFinite(num)) node.value = String(num);
+    }
+  }
+  syncReadouts();
+}
+
 async function loadPreset(name) {
   try {
     const opts = await invoke("preset_options", { name });
@@ -125,10 +200,24 @@ async function loadPreset(name) {
   advanced.classList.toggle("is-disabled", name === "none");
 }
 
-presetSelect.addEventListener("change", () => loadPreset(presetSelect.value));
+// Picking a preset means the preset wins: load its values and remember *those*.
+// Saved fields are only layered on at startup, never here.
+presetSelect.addEventListener("change", async () => {
+  await loadPreset(presetSelect.value);
+  saveSettings();
+});
+
+formatSelect.addEventListener("change", saveSettings);
 
 for (const spec of Object.values(FIELDS)) {
-  el(spec.el).addEventListener("input", syncReadouts);
+  const node = el(spec.el);
+  node.addEventListener("input", () => {
+    syncReadouts();
+    saveSoon();
+  });
+  // Checkboxes and selects settle on `change`; save straight away rather than waiting
+  // out the debounce, so a quick toggle-then-quit is still recorded.
+  node.addEventListener("change", saveSettings);
 }
 
 // --- Queue rows --------------------------------------------------------------------
@@ -321,4 +410,17 @@ function describeResult(result) {
   return parts.join(" · ");
 }
 
-loadPreset(presetSelect.value);
+async function init() {
+  const saved = readSaved();
+  if (saved) {
+    restoreSelect(formatSelect, saved.format);
+    restoreSelect(presetSelect, saved.preset);
+  }
+  // The preset has to load first either way: it is what populates `hiddenOptions` with
+  // the backend-owned fields the panel never shows. Saved values go on top, so a
+  // hand-tweaked setting survives without losing those.
+  await loadPreset(presetSelect.value);
+  if (saved) applySavedFields(saved.fields);
+}
+
+init();
