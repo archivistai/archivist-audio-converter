@@ -165,6 +165,9 @@ Craig and USB-mic recordings do not have.
    to build the app and attach installers to a **draft** GitHub Release
    tagged with the pushed tag name. Every leg uploads into the same draft;
    publishing it is a deliberate manual step (see below).
+6. Uploads a second copy of each installer under a version-free name, so the
+   download links on the landing page never need updating (see
+   "Permanent download URLs").
 
 To cut a release:
 ```
@@ -179,6 +182,31 @@ publish it:
 ```
 gh release edit v0.2.1 --draft=false
 ```
+
+### Permanent download URLs
+
+Link these from the landing page. They always resolve to the newest
+**published** release, so they never need updating:
+
+| Platform | URL |
+| --- | --- |
+| macOS, Apple Silicon | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-macos-apple-silicon.dmg` |
+| macOS, Intel | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-macos-intel.dmg` |
+| Windows | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-windows-x64-setup.exe` |
+
+Notes:
+
+- **There is no universal macOS build.** Serve the right `.dmg` per
+  architecture, or offer two clearly labelled buttons. An Apple Silicon user
+  who downloads the Intel build gets it under Rosetta 2, where the neural
+  denoise pass runs 3-5x slower — or fails outright on a Mac without Rosetta.
+- **Never link the `.app.tar.gz` assets.** They are Tauri updater artifacts,
+  not installers: a bare tarball of the `.app` with no DMG wrapper.
+- `latest/download` ignores drafts and prereleases, so these URLs keep serving
+  the previous version until the new draft is published — which is exactly the
+  behaviour wanted. They 404 only if no published release exists at all.
+- The versioned filenames (`Audio.Converter_0.2.5_aarch64.dmg`) are still
+  published alongside, for support questions and for linking a specific build.
 
 ### Things worth knowing / adjusting
 
