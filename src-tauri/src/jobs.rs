@@ -46,10 +46,16 @@ impl JobRegistry {
 
     /// Detaches the current child once a pass has finished on its own.
     pub fn detach_child(&self, job_id: &str) {
+        let _ = self.take_child(job_id);
+    }
+
+    /// Hands back the running child *without* flagging the job as cancelled.
+    ///
+    /// The stall watchdog needs this: killing through `cancel` would make a wedged ffmpeg
+    /// indistinguishable from a user pressing Cancel, and the job would report success.
+    pub fn take_child(&self, job_id: &str) -> Option<CommandChild> {
         let mut map = self.inner.lock().expect("job registry poisoned");
-        if let Some(handle) = map.get_mut(job_id) {
-            handle.child = None;
-        }
+        map.get_mut(job_id).and_then(|handle| handle.child.take())
     }
 
     pub fn is_cancelled(&self, job_id: &str) -> bool {

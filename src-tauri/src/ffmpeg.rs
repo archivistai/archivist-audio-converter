@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -14,6 +15,22 @@ use crate::jobs::JobRegistry;
 /// Keeps the failure message useful without letting a multi-hour run accumulate an
 /// unbounded log in memory.
 const STDERR_KEEP_LINES: usize = 200;
+
+/// How long a pass may run without `out_time` advancing before it is treated as hung.
+///
+/// FFmpeg 9.x livelocks in `arnndn` -> `speechnorm` on long speech-like input: it spins on
+/// the CPU while producing no output, never errors and never exits (see README, "ffmpeg
+/// version drift"). With no timeout the run loop waits on that forever - one user sat at
+/// "Cleaning up 92%" for two days before giving up. The pin is the real fix; this only
+/// guarantees the app fails loudly instead of freezing if a bad build ever ships again.
+///
+/// Deliberately generous. `-stats_period 0.5` makes a healthy pass report twice a second
+/// however slow the machine, so five silent minutes is already far outside normal, while a
+/// laptop that slept briefly mid-job still comes in under it.
+const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// How often the run loop wakes to check the watchdog when no events arrive at all.
+const STALL_POLL: Duration = Duration::from_secs(5);
 
 pub const PROGRESS_EVENT: &str = "cleanup://progress";
 
@@ -119,16 +136,30 @@ pub async fn run_ffmpeg(
     let mut json = JsonBlockScanner::default();
     let mut prog = ProgressAccumulator::default();
     let mut success = false;
+    let mut watch = StallWatch::new(Instant::now());
+    let mut stalled = false;
 
-    while let Some(event) = rx.recv().await {
+    loop {
+        // Waking on a timer instead of blocking on recv() is what makes a silent child
+        // noticeable at all: a livelocked ffmpeg sends nothing and never exits, so the
+        // event channel simply stays open and empty.
+        let event = match tokio::time::timeout(STALL_POLL, rx.recv()).await {
+            Ok(Some(event)) => Some(event),
+            Ok(None) => break,
+            Err(_) => None,
+        };
+
         match event {
-            CommandEvent::Stdout(line) => {
+            Some(CommandEvent::Stdout(line)) => {
                 let line = String::from_utf8_lossy(&line).to_string();
-                if let (Some(ctx), Some(update)) = (progress.as_ref(), prog.push(&line)) {
-                    emit_progress(app, ctx, &update);
+                if let Some(update) = prog.push(&line) {
+                    watch.observe(update.out_time_us, Instant::now());
+                    if let Some(ctx) = progress.as_ref() {
+                        emit_progress(app, ctx, &update);
+                    }
                 }
             }
-            CommandEvent::Stderr(line) => {
+            Some(CommandEvent::Stderr(line)) => {
                 let line = String::from_utf8_lossy(&line).to_string();
                 json.push(&line);
                 if stderr.len() == STDERR_KEEP_LINES {
@@ -136,12 +167,39 @@ pub async fn run_ffmpeg(
                 }
                 stderr.push_back(line);
             }
-            CommandEvent::Terminated(payload) => {
+            Some(CommandEvent::Terminated(payload)) => {
                 success = payload.code == Some(0);
                 break;
             }
             _ => {}
         }
+
+        // Only a pass that asked for `-progress` reports out_time, so only such a pass can
+        // be judged stalled. A cancelled job is already on its way down; leave it be.
+        if progress.is_some() && watch.is_stalled(Instant::now()) {
+            if jobs.is_cancelled(job_id) {
+                break;
+            }
+            stalled = true;
+            break;
+        }
+    }
+
+    if stalled {
+        if let Some(child) = jobs.take_child(job_id) {
+            let _ = child.kill();
+        }
+        let stage = progress
+            .as_ref()
+            .map(|ctx| ctx.stage.as_str())
+            .unwrap_or("This step");
+        return Err(format!(
+            "The \"{stage}\" step stopped responding: ffmpeg ran for {} minutes without \
+             making any progress, so it was stopped. If this keeps happening, set Noise \
+             reduction to Spectral or Off - some ffmpeg builds wedge in the neural \
+             denoiser on long recordings.",
+            STALL_TIMEOUT.as_secs() / 60
+        ));
     }
 
     jobs.detach_child(job_id);
@@ -185,6 +243,36 @@ fn emit_progress(app: &AppHandle, ctx: &ProgressCtx, update: &ProgressUpdate) {
             eta_seconds,
         },
     );
+}
+
+/// Decides whether a pass has stopped making progress.
+///
+/// Tracks the *high-water mark* of `out_time`, not the last value reported: a wedged ffmpeg
+/// can keep emitting progress blocks that repeat or rewind out_time, and treating those as
+/// signs of life would defeat the whole watchdog.
+struct StallWatch {
+    furthest_us: u64,
+    last_advance: Instant,
+}
+
+impl StallWatch {
+    fn new(now: Instant) -> Self {
+        Self {
+            furthest_us: 0,
+            last_advance: now,
+        }
+    }
+
+    fn observe(&mut self, out_time_us: u64, now: Instant) {
+        if out_time_us > self.furthest_us {
+            self.furthest_us = out_time_us;
+            self.last_advance = now;
+        }
+    }
+
+    fn is_stalled(&self, now: Instant) -> bool {
+        now.duration_since(self.last_advance) >= STALL_TIMEOUT
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -448,6 +536,59 @@ mod tests {
         assert!(args.contains(&"-nostdin".to_string()));
         assert!(args.contains(&"-nostats".to_string()));
         assert!(args.contains(&"-y".to_string()));
+    }
+
+    #[test]
+    fn tauri_runtime_has_a_timer() {
+        // Tauri constructs its async runtime with `tokio::runtime::Runtime::new()` and does
+        // not enable tokio's "time" feature itself; this crate's Cargo.toml does. If that
+        // ever gets dropped, `enable_all()` quietly skips the timer and every ffmpeg pass
+        // panics on its first `timeout` poll - a far worse failure than the hang this
+        // watchdog exists to catch. Build the runtime the same way tauri does and prove the
+        // timer actually fires.
+        let rt = tokio::runtime::Runtime::new().expect("runtime should build");
+        rt.block_on(async {
+            let never = std::future::pending::<()>();
+            let elapsed = tokio::time::timeout(Duration::from_millis(1), never).await;
+            assert!(elapsed.is_err(), "timer driver is not running");
+        });
+    }
+
+    #[test]
+    fn stall_watch_resets_only_on_forward_motion() {
+        let t0 = Instant::now();
+        let mut watch = StallWatch::new(t0);
+        watch.observe(5_000_000, t0 + Duration::from_secs(1));
+        assert!(!watch.is_stalled(t0 + Duration::from_secs(100)));
+
+        // A livelocked ffmpeg keeps reporting the same out_time. That is not progress, so
+        // the clock must keep running from the last genuine advance.
+        for tick in 2..60 {
+            watch.observe(5_000_000, t0 + Duration::from_secs(tick * 5));
+        }
+        assert!(watch.is_stalled(t0 + Duration::from_secs(1) + STALL_TIMEOUT));
+    }
+
+    #[test]
+    fn stall_watch_tolerates_a_rewound_out_time() {
+        let t0 = Instant::now();
+        let mut watch = StallWatch::new(t0);
+        watch.observe(9_000_000, t0 + Duration::from_secs(10));
+        watch.observe(1_000_000, t0 + Duration::from_secs(20)); // rewind: not progress
+        assert!(watch.is_stalled(t0 + Duration::from_secs(10) + STALL_TIMEOUT));
+
+        watch.observe(9_000_001, t0 + Duration::from_secs(30)); // past the mark: alive again
+        assert!(!watch.is_stalled(t0 + Duration::from_secs(30) + STALL_TIMEOUT / 2));
+    }
+
+    #[test]
+    fn stall_watch_covers_a_pass_that_never_starts() {
+        // No progress block ever arrives (ffmpeg wedged before producing a sample), so the
+        // window has to run from when the pass was spawned.
+        let t0 = Instant::now();
+        let watch = StallWatch::new(t0);
+        assert!(!watch.is_stalled(t0 + STALL_TIMEOUT - Duration::from_secs(1)));
+        assert!(watch.is_stalled(t0 + STALL_TIMEOUT));
     }
 
     #[test]

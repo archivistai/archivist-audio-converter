@@ -18,7 +18,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-14 # Apple Silicon runner
+          # macos-14 retired 2026-11-02. A job requesting a retired label is cancelled
+          # about a second after it starts, with no runner ever assigned and zero steps
+          # recorded - it looks nothing like a test failure, so check `runner_name` before
+          # suspecting the code. macos-15 is the current pinned Apple Silicon image;
+          # macos-latest is deliberately avoided because it moves under us.
+          - platform: macos-15 # Apple Silicon runner
             rust-target: aarch64-apple-darwin
             sidecar-target: aarch64-apple-darwin
             sidecar-arch: arm64 # ffmpeg download flavour

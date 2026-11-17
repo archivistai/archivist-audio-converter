@@ -195,12 +195,28 @@ git push --tags
   (`FFMPEG_VERSION` and the per-arch `mac-ffmpeg-build` ids in `release.yml`),
   and CI asserts the version it actually got. FFmpeg 9.0, 9.0.1 and 9.0.2 hang
   when `arnndn` feeds `speechnorm`: on Windows the cleanup render stalled in
-  roughly 3 of 4 runs, while 7.0.2 through 8.0.1 never stalled in 32 runs; the
-  Mac 9.0.2 builds stalled occasionally. That is the same symptom as a
-  conversion sticking at "Cleaning up". Before bumping the pin, run the smoke
-  test against the candidate several times, not once — the hang is
-  intermittent on macOS. The smoke test still runs the real cleanup chain, so
-  an option rename or a behaviour change fails CI immediately.
+  roughly 3 of 4 runs, while 7.0.2 through 8.0.1 never stalled in 32 runs. That
+  is the same symptom as a conversion sticking at "Cleaning up".
+  - **The trigger is input length, not luck.** macOS was previously described
+    here as stalling only "occasionally". It does not: on arm64 against 9.0.1,
+    120s of speech-like audio livelocked **16/16** runs — 8/8 through the old
+    single-process graph and 8/8 through the v0.2.4 sequential pass — against a
+    ~1.2s healthy baseline. The same signal at 10s completed every time, in
+    0.1s. The apparent intermittency was short test clips, which is also why
+    users report that conversion "used to work": their sessions got longer.
+  - It **spins** rather than blocking, so an ffmpeg that is burning CPU is not
+    evidence that it is making progress.
+  - Splitting the passes apart in v0.2.4 does **not** help. The pin is the only
+    thing preventing this, so treat it as load-bearing.
+  - `scripts/smoke-cleanup.py` now renders a 120s speech-like clip through the
+    real cleanup chain, three times, before the short-clip option matrix. That
+    check is what makes the pin assertion meaningful: the previous 10s-sine-only
+    smoke test passed all four combinations on 9.0.1 itself, so it would have
+    waved a hanging ffmpeg straight through to users. Judge a candidate by wall
+    time against the ~100x-realtime baseline, not by exit code.
+  - As a backstop, `run_ffmpeg` kills any pass whose `out_time` has not advanced
+    for five minutes and reports an actionable error. That turns a freeze into a
+    failure; it is not a substitute for the pin.
 - **ffmpeg licensing.** These static builds typically include GPL-licensed
   components (e.g. libx264). Redistributing them means your app's
   distribution needs to comply with the GPL (e.g. making corresponding
