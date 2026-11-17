@@ -148,33 +148,88 @@ Craig and USB-mic recordings do not have.
 ## CI/CD: what happens on every push to `main`
 
 `.github/workflows/release.yml` triggers on pushing a version tag
-(`v*.*.*`) and runs a 3-way matrix build (`macos-14` → Apple Silicon,
+(`v*.*.*`) and runs a 3-way matrix build (`macos-15` → Apple Silicon,
 `macos-15-intel` → Intel, `windows-latest`). For each platform it:
 
 1. Downloads static `ffmpeg` **and** `ffprobe` builds and stages them as Tauri
    sidecar binaries.
 2. On macOS, asserts each binary's architecture with `lipo -archs` and fails
    the build on a mismatch.
-3. Smoke-tests cleanup, measurement and encoding with compression and R128 on/off, so
-   an upstream ffmpeg option rename or a missing model fails here in seconds
-   rather than in someone's 4-hour session.
+3. Smoke-tests cleanup, measurement and encoding. First a 120s speech-like
+   hang check (three runs) that fails on an ffmpeg carrying the 9.x
+   `arnndn` -> `speechnorm` livelock, then the option matrix with compression
+   and R128 on/off, so an upstream option rename or a missing model fails here
+   in seconds rather than in someone's 4-hour session.
 4. Regenerates app icons from `icon-source.png`.
 5. Runs [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)
-   to build the app and publish installers as assets on a GitHub Release
-   tagged with the pushed tag name.
+   to build the app and attach installers to a **draft** GitHub Release
+   tagged with the pushed tag name. Every leg uploads into the same draft;
+   publishing it is a deliberate manual step (see below).
+6. Uploads a second copy of each installer under a version-free name, so the
+   download links on the landing page never need updating (see
+   "Permanent download URLs").
 
 To cut a release:
 ```
-# bump the version in src-tauri/tauri.conf.json first, then:
+# bump the version in all three manifests first (they are not linked):
+#   package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml
 git tag v0.2.1
 git push --tags
 ```
+Then wait for **all three** matrix legs to go green, confirm the draft has six
+assets (`aarch64.dmg`, `x64.dmg`, two `.app.tar.gz`, `.exe`, `.msi`), and
+publish it:
+```
+gh release edit v0.2.1 --draft=false
+```
+
+### Permanent download URLs
+
+Link these from the landing page. They always resolve to the newest
+**published** release, so they never need updating:
+
+| Platform | URL |
+| --- | --- |
+| macOS, Apple Silicon | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-macos-apple-silicon.dmg` |
+| macOS, Intel | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-macos-intel.dmg` |
+| Windows | `https://github.com/archivistai/archivist-audio-converter/releases/latest/download/Audio-Converter-windows-x64-setup.exe` |
+
+Notes:
+
+- **There is no universal macOS build.** Serve the right `.dmg` per
+  architecture, or offer two clearly labelled buttons. An Apple Silicon user
+  who downloads the Intel build gets it under Rosetta 2, where the neural
+  denoise pass runs 3-5x slower — or fails outright on a Mac without Rosetta.
+- **Never link the `.app.tar.gz` assets.** They are Tauri updater artifacts,
+  not installers: a bare tarball of the `.app` with no DMG wrapper.
+- `latest/download` ignores drafts and prereleases, so these URLs keep serving
+  the previous version until the new draft is published — which is exactly the
+  behaviour wanted. They 404 only if no published release exists at all.
+- The versioned filenames (`Audio.Converter_0.2.5_aarch64.dmg`) are still
+  published alongside, for support questions and for linking a specific build.
 
 ### Things worth knowing / adjusting
 
-- **Version consistency.** The git tag and `tauri.conf.json`'s `version`
-  field aren't linked automatically — bump the latter before tagging so the
-  built app reports the same version as the release.
+- **Version consistency.** The git tag and the `version` fields in
+  `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`
+  aren't linked automatically — bump all three before tagging so the built
+  app reports the same version as the release.
+- **The release is a draft on purpose.** The matrix runs with
+  `fail-fast: false`, so one leg can fail while the others succeed. When the
+  release was published directly, that was enough to ship: v0.2.5 went public
+  with the Windows and Intel builds and **no Apple Silicon artifact at all**,
+  because the arm64 leg died in codesign while the other two uploaded fine.
+  An Apple Silicon user would have found only the Intel `.dmg` — the Rosetta
+  trap the `lipo` assertion exists to prevent, reached by a different route.
+  Publishing by hand is the check that "two of three legs passed" can't ship.
+- **Codesign and Apple's timestamp server.** `codesign` contacts Apple's
+  timestamp authority for every binary it signs (the app plus both sidecars),
+  and fails outright when Apple is briefly unreachable:
+  `A timestamp was expected but was not found`. This is transient — it killed
+  the v0.2.5 arm64 leg ~15s into signing while the Intel leg signed cleanly 17
+  minutes later. The build step retries once automatically; if both attempts
+  fail, re-run the job rather than hunting for a signing misconfiguration. A
+  genuinely bad identity fails instantly and says so.
 - **Third-party ffmpeg builds.** The workflow pulls prebuilt static binaries
   from `gyan.dev` (Windows, the "essentials" zip, which contains both ffmpeg
   and ffprobe) and `ffmpeg.martin-riedl.de` (macOS, native arm64 and amd64) —
